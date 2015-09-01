@@ -309,7 +309,7 @@
                 lastActive = active,
                 handler = function() {
                     me.wrap.removeEventListener(transitionEndEvent, handler, false);
-                    me.wrap.style[transitionDuration] = '0ms';
+                    // me.wrap.style[transitionDuration] = '0ms';
                     if (me.indicators && me.indicatorCls) {
                         if (me.indicators[lastActive]) removeClass(me.indicators[lastActive], me.indicatorCls);
                         if (me.indicators[me.activeIndex]) addClass(me.indicators[me.activeIndex], me.indicatorCls);
@@ -319,9 +319,39 @@
             me.activeIndex = toIndex;
 
             if (!silent) listenTransition(me.wrap, me.duration, handler);
+            me._slip(toIndex, silent);
             // me.wrap.style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
             // me.wrap.style[transform] = 'translate3d(' + (-me.getItemWidth() * toIndex) + 'px, 0px, 0px)';
             if (silent) handler();
+        },
+
+        // private
+        _slip: function(index, silent) {
+            var me = this,
+                items = this.items,
+                itemsLen = items.length,
+                prevIndex = index === 0 ? itemsLen - 1 : index - 1,
+                nowIndex = index,
+                nextIndex = index < itemsLen - 1 ? index + 1 : 0;
+
+            items[prevIndex].style[transitionDuration] = '0ms';
+            items[nowIndex].style[transitionDuration] = '0ms';
+            items[nextIndex].style[transitionDuration] = '0ms';
+
+            items[prevIndex].style[transform] = 'translate3d(' + (-me.getItemWidth()) + 'px, 0px, 0px)';
+            items[nowIndex].style[transform] = 'translate3d(0px, 0px, 0px)';
+            items[nextIndex].style[transform] = 'translate3d(' + me.getItemWidth() + 'px, 0px, 0px)';
+
+            items[prevIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
+            items[nowIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
+            items[nextIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
+
+            items[prevIndex].style[transform] = 'translate3d(' + (-me.getItemWidth() * 2) + 'px, 0px, 0px)';
+            items[nowIndex].style[transform] = 'translate3d(' + (-me.getItemWidth()) + 'px, 0px, 0px)';
+            items[nextIndex].style[transform] = 'translate3d(0px, 0px, 0px)';
+
+
+
         },
 
         // private
