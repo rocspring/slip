@@ -319,8 +319,8 @@
             me.activeIndex = toIndex;
 
             if (!silent) listenTransition(me.wrap, me.duration, handler);
-            me.wrap.style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
-            me.wrap.style[transform] = 'translate3d(' + (-me.getItemWidth() * toIndex) + 'px, 0px, 0px)';
+            // me.wrap.style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
+            // me.wrap.style[transform] = 'translate3d(' + (-me.getItemWidth() * toIndex) + 'px, 0px, 0px)';
             if (silent) handler();
         },
 
@@ -410,7 +410,7 @@
                 translateX += offsetX;
             }
             if (absX < itemWidth) {
-                me.wrap.style[transform] = 'translate3d(' + -translateX + 'px, 0px, 0px)';
+                // me.wrap.style[transform] = 'translate3d(' + -translateX + 'px, 0px, 0px)';
             }
         },
 
