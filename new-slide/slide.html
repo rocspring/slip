@@ -1,0 +1,2210 @@
+<html>
+    <!--head-->
+<head>
+    <script crossorigin="">/**
+ * Created by yunshengli on 2014/10/22.
+ */
+(function(window) {
+    var LOG_LEVELS = ["DEBUG", "LOG", "INFO", "WARN", "ERROR"], //日志级别
+        //TODO 是否可以做成队列阈值和倒计时时间由UI配置？
+        THRESHOLD = 200, // 触发日志上传的阈值，设置大一点，避免高频的请求导致并发问题
+        TIMER = 1000, // 倒计时，间隔发送时间
+        URL = location.protocol + "//__rosin__.qq.com",
+        KEY = +new Date() + '_' + parseInt(Math.random() * 1e8); // 每个页面生成一个唯一key
+
+    // https的请求，使用另外的通信协议
+    if(location.protocol === "https:") {
+        URL = "https://" + location.host + '/?__rosin__';
+    }
+
+    /**
+     * 上传任务队列
+     * 队列长度达到阈值触发POST日志
+     * @type {{_queueArr: Array, add: add, _post: _post}}
+     */
+    var queue = {
+        _queueArr: [], //数组模拟队列
+        add: function() {
+            Array.prototype.push.apply(this._queueArr, arguments);
+            clock.start();
+
+            //队列达到阈值就触发上传
+            if (this._queueArr.length >= THRESHOLD) {
+                this._post(this._queueArr.splice(0, this._queueArr.length));
+                return;
+            }
+        },
+        _post: function(logArr) {
+            var headers = {};
+            var setHeader = function(name, value) {
+                headers[name.toLowerCase()] = [name, value]
+            };
+            var xhr = new XMLHttpRequest();
+            var nativeSetHeader = xhr.setRequestHeader;
+
+            setHeader('Accept', '*/*');
+
+            setHeader('Content-Type', 'application/x-www-form-urlencoded');
+
+            xhr.setRequestHeader = setHeader;
+            xhr.onreadystatechange = function(){}; // do nothing
+            xhr.open('POST', URL, true);
+            // chrome 控制台会看到一个报错
+            // A wildcard '*' cannot be used in the 'Access-Control-Allow-Origin' header when the credentials flag is true.
+            // xhr.withCredentials = true;
+
+            for (name in headers) nativeSetHeader.apply(xhr, headers[name]);
+            
+            xhr.send(JSON.stringify(logArr));
+        }
+    },
+
+    /**
+     * 自定义日志对象
+     * @type {{DELIMITER: string, _record: _record, debug: debug, log: log, info: info, warn: warn, error: error}}
+     */
+    FConsole = {
+        DELIMITER: " ", //分隔符
+        JSON_TAG_LEFT: '\uFFFE', // 用于标识json对象字符串的等宽字符
+        JSON_TAG_RIGHT: '\uFEFF',
+        _record: function(logLevel) {
+            var log = {
+                "key": KEY,
+                "level": logLevel, //日志级别
+                "time": new Date().getTime() //日志时间，时间戳
+                // "url"  : window.location.href //记录日志的URL
+            },
+            content = ""; //日志内容
+
+            for (var i = 1; i < arguments.length; i++) {
+                if (Array.isArray(arguments[i])) {
+                    content += (i === 1 ? "" : FConsole.DELIMITER) + FConsole.JSON_TAG_LEFT + "[" + arguments[i] + "]" + FConsole.JSON_TAG_RIGHT;
+                } else if (typeof arguments[i] === "object") {
+                    content += (i === 1 ? "" : FConsole.DELIMITER) + FConsole.JSON_TAG_LEFT + JSON.stringify(arguments[i]) + FConsole.JSON_TAG_RIGHT;
+                } else {
+                    content += (i === 1 ? "" : FConsole.DELIMITER) + arguments[i];
+                }
+            }
+            log["content"] = content;
+
+            //日志记录加入队列
+            queue.add(log)
+        },
+        debug: function() {
+            Array.prototype.unshift.call(arguments, LOG_LEVELS[0]);
+            FConsole._record.apply(FConsole, arguments);
+        },
+        log: function() {
+            Array.prototype.unshift.call(arguments, LOG_LEVELS[1]);
+            FConsole._record.apply(FConsole, arguments);
+        },
+        info: function() {
+            Array.prototype.unshift.call(arguments, LOG_LEVELS[2]);
+            FConsole._record.apply(FConsole, arguments);
+        },
+        warn: function() {
+            Array.prototype.unshift.call(arguments, LOG_LEVELS[3]);
+            FConsole._record.apply(FConsole, arguments);
+        },
+        error: function() {
+            Array.prototype.unshift.call(arguments, LOG_LEVELS[4]);
+            FConsole._record.apply(FConsole, arguments);
+        }
+    },
+
+    /**
+     * 全局定时器，监听队列
+     * @type {{timeout: null, start: Function, clear: Function}}
+     */
+    clock = {
+        timeout: null,
+        start: function() {
+            var self = this;
+            if (!this.timeout) this.timeout = setInterval(function() {
+                if (queue._queueArr.length > 0) {
+                    queue._post(queue._queueArr.splice(0, queue._queueArr.length));
+                }
+            }, TIMER);
+        },
+        clear: function() {
+            clearTimeout(this.timeout);
+            this.timeout = null;
+        }
+    };
+
+
+    function _extendObj(obj) {
+        if (typeof obj !== 'object') return obj;
+        var source, prop;
+        for (var i = 1, length = arguments.length; i < length; i++) {
+            source = arguments[i];
+            for (prop in source) {
+                if (Object.prototype.hasOwnProperty.call(source, prop)) {
+                    // 不覆盖原方法执行，只是加个壳
+                    (function(obj, prop) {
+                        if (typeof obj[prop] === "function") {
+                            var oldFun = obj[prop].bind(obj);
+                            obj[prop] = function() {
+                                source[prop].apply(source, arguments);
+                                // oldFun.apply(obj, arguments);
+                                oldFun(arguments[0]);
+                            };
+                        } else {
+                            obj[prop] = source[prop];
+                        }
+                    })(obj, prop);
+                }
+            }
+        }
+        return obj;
+    };
+
+    //将自定义的日志API覆盖到原生console中
+    _extendObj(window.console, FConsole);
+
+    // script error监听解析
+    (function(win) {
+        var scriptErrorHander = function(errorMsg, url, lineNumber) {
+            var errorObj = {};
+            errorObj.errorMsg = errorMsg;
+            errorObj.url = url || '';
+            errorObj.lineNumber = lineNumber || 0;
+
+            FConsole.error('script error,', errorObj);
+        };
+
+        if (win.addEventListener) {
+            win.addEventListener('error', function(e){
+                scriptErrorHander(e.message, e.filename, e.lineno);
+            }, false);
+        } else if (win.attachEvent) {
+            win.attachEvent('error', function(e){
+                scriptErrorHander(e.message, e.filename, e.lineno);
+            });
+        } else {
+            win.onerror = scriptErrorHander;
+        }
+    })(window);
+
+})(window)</script>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta http-equiv="Cache-Control" content="no-cache">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta name="MobileOptimized" content="320">
+    <meta name="description" content="手机搜狐网，懂手机，更懂你！手机搜狐是国内最大的移动门户之一，利用搜狐门户矩阵资源，内容覆盖新闻、财经、体育、娱乐、女人、图库、视频等资讯，为7亿手机用户打造随时随地的掌上资讯生活。手机搜狐网，手机搜狐触版- m.sohu.com">
+    <meta name="keywords" content="手机搜狐,手机搜狐网,搜狐手机版,搜狐新闻,搜狐,搜狐网,资讯,娱乐,女人,神吐槽,热辣评,狐揭秘">
+    <title>手机搜狐网</title>
+    <link rel="apple-touch-icon-precomposed" href="/images/logo-icon.png">
+    <!--link rel="apple-touch-icon" sizes="114x114" href="http://s7.rr.itc.cn/org/wapChange/201312_27_14/b3qx5e1696349236093.png" -->
+    <link rel="stylesheet" type="text/css" href="./style/main.css" media="all"></head>
+    <!--head-->
+<body class="home android">
+    <div class="sch_new sch_new_20140508">
+        <div class="schWrap fat">
+
+            <ul id="j_search_tab" class="search_tab">
+                <li class="search_tab_on" data-type="1">
+                    <span>网页</span>
+                </li>
+                <li class="search_tab_weixin" data-type="2">
+                    <span>微信</span>
+                </li>
+                <li class="search_tab_msohu search_tab_new" data-type="3">
+                    <span>站内</span>
+                </li>
+            </ul>
+            <form action="/ts/"> <i class="home_i sogou_logo"></i>
+                <input name="keyword" type="text" class="key" value="" placeholder="搜狗搜索" autocomplete="off">
+                <input name="_once_" value="000024_sogou_clickv3_home" type="hidden">
+                <button type="submit" class="submit">搜索</button>
+                <button type="button" class="cancel"> <i class="i"></i>
+                </button>
+            </form>
+        </div>
+        <div class="fixed_suggestion">
+            <ul>
+                <li>
+                    <a href="http://m.sohu.com/f/BfYVfaa/?_once_=000024_sogou_homewxtg">
+                        <i class="S_iS"></i>
+                        搜微信热点，看八卦猛料！
+                        <i class="S_iE"></i>
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <a class="cancel_search" href="#"></a>
+    </div>
+
+    <div class="pageBody">
+        <!--顶部-->
+        <header class="homeHead">
+            <h1 class="logo">
+                <a href="/">
+                    <i class="img"><img src="http://s1.rr.itc.cn/w/u/0/home_logo.png" alt="搜狐网SOHU.com" name="搜狐网SOHU.com"></i>
+                </a>
+            </h1>
+            <div class="aside">
+                <a href="http://m.sohu.com/weather/?_once_=000025_weatherv3" class="quickLink weatherTip">
+                    <div class="ico">
+                        <div class="data pm">
+                            <div class="t h">PM2.5</div>
+                            <div class="t l">
+                                5
+                                        优
+                            </div>
+
+                        </div>
+                        <div class="img wLightRain"></div>
+                        <div class="data degrees">
+                            <div class="t h">25°</div>
+                            <div class="t l">18°</div>
+                        </div>
+                    </div>
+                    <div class="des">北京</div>
+                </a>
+
+                <a href="http://m.sohu.com/f/mail/?_once_=000109_hometop" class="quickLink email">
+                    <div class="ico">
+                        <div class="img"></div>
+                    </div>
+                    <div class="des">邮箱</div>
+                </a>
+
+                <a href="http://m.sohu.com/c/6255/?_once_=000058_v3" class="quickLink apps" style="display:none;">
+                    <div class="ico">
+                        <div class="img"></div>
+                    </div>
+                    <div class="des">应用</div>
+                </a>
+
+                <a href="http://m.sohu.com/c/7918/?_once_=000025_topdh_sy&amp;v=3" class="quickLink siteBook">
+                    <div class="ico">
+                        <div class="img"></div>
+                    </div>
+                    <div class="des">名站</div>
+                </a>
+
+                <a href="http://m.sohu.com/c/6255/?_once_=000098_todesktop_home" class="quickLink androidApk">
+                    <div class="ico">
+                        <div class="img"></div>
+                    </div>
+                    <div class="des">放到桌面</div>
+
+                </a>
+
+            </div>
+        </header>
+        <!--顶部-->
+
+        <!--顶部导航栏-->
+        <nav class="site all">
+            <div>
+                <a href="/c/2/?_once_=000025_top_xinwen_v3">新闻</a>
+                <a href="/c/5/?_once_=000025_top_caijing_v3">财经</a>
+                <a href="/c/4/?_once_=000025_top_yule_v3">娱乐</a>
+                <a href="/c/3/?_once_=000025_top_tiyu_v3">体育</a>
+                <a href="/c/8/?_once_=000025_top_junshi_v3">军事</a>
+                <a href="/c/5933/?_once_=000025_top_tuku_v3">图库</a>
+                <a href="http://m.tv.sohu.com/?channeled=1200010002">视频</a>
+                <a href="/c/1592/?_once_=000025_top_qiche_v3">汽车</a>
+                <a href="/c/5100/?_once_=000025_top_lishi_v3">历史</a>
+                <a href="/c/16085/?_once_=000025_top_health_v3">健康</a>
+                <a href="/c/16879/?_once_=000025_top_whds_v3">文化</a>
+                <a href="javascript:;" class="nM">
+                    更多
+                    <i class="i iF iF2"></i>
+                </a>
+                <!--点击后，设置nav的style.height=父级div高度-->
+                <a href="/c/326/?_once_=000025_top_nvren_v3">时尚</a>
+                <a href="/c/16430/?v=3&amp;_once_=000025_top_keji_v3">科技</a>
+                <a href="/c/16084/?_once_=000025_top_travel_v3">旅游</a>
+                <!--    
+      <a href="/c/9/?_once_=000025_top_xingzuo_v3">星座</a>
+            -->
+            <a href="/c/24/?_once_=000025_top_nba_v3">NBA</a>
+            <a href="http://zhibo.m.sohu.com/?_once_=000090_zhibo">直播</a>
+            <a href="/c/16246/?_once_=000025_top_edu_v3">教育</a>
+            <!--
+      <a href="/c/1393/?_once_=000025_top_xiaohua_v3">笑话</a>
+        <a href="/c/103/?_once_=000025_top_gupiao_v3">股票</a>
+        <a href="/c/28/?_once_=000025_top_caipiao_v3">彩票</a>
+        -->
+        <a href="http://m.sohu.com/f/jiaodian1/?_once_=000025_top_fangchan_v3">房产</a>
+        <a href="/c/16247/?_once_=000025_top_food_v3">美食</a>
+        <a href="/f/UriYraa/?_once_=000025_top_shequ_v3">社区</a>
+        <a href="http://read.m.sohu.com/?_once_=000100_rk_ss">小说</a>
+        <a href="/ic/index?_once_=000025_top_haokan_v3&amp;hk=1024" style="color: rgb(255, 199, 0);">热闻</a>
+        <!--      <a href="/f/tuijian/?_once_=000025_top_tuijian_v3">个性</a>
+    -->
+    <a href="/f/dh17173/">游戏</a>
+    <a href="javascript:;" class="nC">
+        收起
+        <i class="i iF iF3"></i>
+    </a>
+</div>
+</nav>
+
+<!--顶部导航栏-->
+
+<!--头条-->
+<!-- 辅助头条 -->
+<section class="standbyTop"></section>
+
+<!-- 辅助头条 -->
+
+<!--热词继承-->
+
+<!--热词继承-->
+<section class="hn hn1">
+<h4>
+    <a href="/n/420221535/?wscrid=15084_1"> <strong>张高丽:彻查爆炸涉案者背景</strong>
+    </a>
+</h4>
+
+<p>
+    <a href="/n/420221134/?wscrid=15084_2">29次批示:防止次生灾害 彻查事故原因</a>
+</p>
+
+<p>
+    <a href="/n/420182368/?wscrid=15084_3">天津爆炸损失700亿元 隐性影响难估</a>
+</p>
+
+<p>
+    <a href="/n/420228456/?wscrid=15084_4">女子利用天津爆炸事故骗"打赏" 被批捕</a>
+</p>
+
+</section>
+
+<!--精准广告狐首头条-->
+<section class="adbanner">
+<div class="hushoubanner">
+    <a target="_blank" href="/f/mYBRj2a/">
+        <img src="http://images.sohu.com/saf/a2015/0724/wKiDRFWx-RKAfMZVAAAbygVIEIQ499640x40.png"></a>
+</div>
+</section>
+
+<section class="hn hn1">
+<h4>
+    <a href="/n/556399705/?wscrid=53939_1"> <strong>9-3大阅兵流程:分列式50分钟</strong>
+    </a>
+</h4>
+
+<p>
+    <a href="/n/556399600/?wscrid=53939_2">日本再度质疑潘基文出席 遭联合国驳斥</a>
+</p>
+
+<p>
+    <a href="/n/420182731/?wscrid=53939_3">日媒讽朴槿惠赴阅兵:清朝属国末代王妃</a>
+</p>
+
+<p>
+    <a href="/n/556399608/?wscrid=53939_4">菲律宾前总统力挺中国 确认出席9-3阅兵</a>
+</p>
+
+<p>
+    <a href="/n/556399559/?wscrid=53939_5">独家|阅兵正步哪家强?"中国式"气势最强</a>
+</p>
+
+</section>
+<!--头条-->
+
+<!--焦点图-->
+<section class="tips">
+<div class="wrapper">
+    <div class="topic-info" style="overflow: hidden;">
+        <ul class="topic-swipe" id="topic-swipe" style="transform: translate3d(-720px, 0px, 0px); transition: transform 0ms;">
+
+            <li class="topic-item" style="/* left: 0px; */">
+                <div class="img-l">
+                    <a href="/p/680695/?wscrid=1135_1">
+                        <img src="http://s8.rr.itc.cn/org/wapChange/20159_1_16/a4x4kf512721063451.jpg" alt="日本籍八路军来京参加抗战纪念大会" border="0" class="topic_img" link="/p/680695/?wscrid=1135_1"></a>
+                    <div class="topic-title">
+                        <p>日本籍八路军来京参加抗战纪念大会</p>
+                    </div>
+                </div>
+            </li>
+            <li class="topic-item" style="/* left: 360px; */">
+                <div class="img-l">
+                    <a href="/p/680641/?wscrid=1135_2">
+                        <img src="http://s9.rr.itc.cn/org/wapChange/20159_1_16/a9zpab003191081451.jpg" alt="习近平会见连战 谈及抗日正面战场" border="0" class="topic_img" link="/p/680641/?wscrid=1135_2"></a>
+                    <div class="topic-title">
+                        <p>习近平会见连战 谈及抗日正面战场</p>
+                    </div>
+                </div>
+            </li>
+            <li class="topic-item" style="/* left: 720px; */">
+                <div class="img-l">
+                    <a href="/p/680525/?wscrid=1135_3">
+                        <img src="http://s8.rr.itc.cn/org/wapChange/20159_1_11/a5ypta2047673157596.jpg" alt="法总理演讲面对质询流汗不止 浸透衬衫" border="0" class="topic_img" link="/p/680525/?wscrid=1135_3"></a>
+                    <div class="topic-title">
+                        <p>法总理演讲面对质询流汗不止 浸透衬衫</p>
+                    </div>
+                </div>
+            </li>
+
+            <li class="topic-item" style="/* left: 1080px; */">
+                <div class="img-l">
+                    <a href="/c/16831/?_once_=000067_focus&amp;wscrid=1135_4">
+                        <img src="http://s7.rr.itc.cn/org/wapChange/20158_28_19/b9xy216373219944596.png" alt="世界那么大 让我带你去看看" border="0" class="topic_img" link="/c/16831/?_once_=000067_focus&amp;wscrid=1135_4"></a>
+                    <div class="topic-title">
+                        <p>世界那么大 让我带你去看看</p>
+                    </div>
+                </div>
+            </li>
+
+        </ul>
+        <!-- http://s1.rr.itc.cn/p/images/pic_prev.png http://s1.rr.itc.cn/p/images/pic_next.png -->
+        <div class="page-wrapper">
+            <a class="page-prev">
+                <img src="http://s8.rr.itc.cn/org/wapChange/20156_2_15/b84mvp4105546836266.png" width="11" style=""></a>
+            <a class="page-next">
+                <img src="http://s9.rr.itc.cn/org/wapChange/20156_2_15/a81j1i5977584219487.png" width="11" style=""></a>
+        </div>
+    </div>
+    <div class="slider-bar"></div>
+</div>
+</section>
+<!--焦点图-->
+
+<!--大事件导航-->
+
+<!--大事件导航-->
+
+<!-- 精推区域 -->
+<section class="cnl precise">
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://zhibo.m.sohu.com/r/12388/?wscrid=21620_1" class="h4">
+                <span class="sohunews-ntype nt3">互动</span>
+                滚动播报欧洲足球转会倒计时
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/yyUNZba/?wscrid=39720_1" class="h4">&lt;无心法师&gt;:白琉璃登场争抢无心</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/q2uEZna/?wscrid=39720_2" class="h4">&lt;花千骨&gt;:虐恋!尊上忍痛囚禁小骨</a>
+        </div>
+    </div>
+
+    <!-- 精推区域 -->
+
+    <div class="it">
+        <div class="h4WP">
+            <a href="/c/17472/?_once_=000067_homelive" class="h4">超牛理财方法,让你的钱包鼓起来!</a>
+        </div>
+    </div>
+</section>
+</section>
+
+<!-- 要闻区域 -->
+<section class="cnl">
+<style type="text/css">.iF6 {margin-top:5px;}</style>
+
+<h3 class="h ht1 adISNews">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/c/8/?_once_=000025_xiaodaohang_xinwen_2v3">军事</a>
+            </li>
+            <li>
+                <a href="/c/32/?_once_=000025_xiaodaohang_xinwen_3v3">国内</a>
+            </li>
+            <li>
+                <a href="/c/53/?_once_=000025_xiaodaohang_xinwen_4v3">社会</a>
+            </li>
+        </menu>
+    </aside> <em><a href="/c/2/?_once_=000025_xiaodaohang_xinwen_1v3">新闻</a>
+        <a href="javascript:void(0);" id="changeDate" data-code="000025_yaowen_change">
+            <i class="i iF6"></i>
+            <i style="font-size:14px;">换一换</i>
+        </a></em> 
+</h3>
+
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420242533/?wscrid=1137_1" class="h4">3大黑手致9月"开门黑" 沪指失守3200</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399598/?wscrid=1137_2" class="h4">"央视曝光"再被打脸 遭吐槽毫无依据</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/bM3Uzma/?wscrid=1137_3" class="h4">
+                <span style="color:rgb(194, 0, 0)">视频</span>
+            </a>
+            <i class="vhr">|</i>
+            <a href="/f/f6riAva1441099319/?wscrid=1137_3" class="h4">
+                <span style="color:rgb(194, 0, 0)">惊人!恐怖食人虫午夜袭击部队</span>
+            </a>
+        </div>
+    </div>
+    <div class="it" id="beans_12416" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/420188200/?wscrid=1137_4" class="h4">半年两降!二套房公积金首付降至20%</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://jump.luna.58.com/s?spm=b-31580022738699-me-f-802&amp;ch=sohu_feeds_job" class="h4">
+                <span class="generalize_label">推广</span>
+                月薪8000起，靠谱好工作！
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420223058/?wscrid=1137_5" class="h4">官媒:过半县处级官员迷信 有3类典型</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420229591/?wscrid=1137_6" class="h4">履新俩月 优秀县书记胡启生再升职</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420233394/?wscrid=1137_7" class="h4">杨栋梁曾私用钢材被告 调天津获赏识</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399732/?wscrid=1137_8" class="h4">国内油价迎"六连跌" 一箱油便宜5元</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399582/?wscrid=1137_9" class="h4">万达广场藏赌场 有人输几十万</a>
+            <i class="vhr">|</i>
+            <a href="/n/420232863/?wscrid=1137_9" class="h4">回应</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399583/?wscrid=1137_10" class="h4">黄光裕出狱在即 狱中确定未来计划</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420236372/?wscrid=1137_11" class="h4">中日高铁方案PK!印尼明日展开探讨</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420242527/?wscrid=1137_12" class="h4">参加真人秀!奥巴马将体验荒野生存</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399661/?wscrid=1137_13" class="h4">外媒:歼11D堪比苏35 机身多处改动</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420253278/?wscrid=1137_14" class="h4">独家|策划了15颗"肉弹" 看他的故事</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399580/?wscrid=1137_15" class="h4">全球"最不友好城市"排行榜:广州第三</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/c/3091/?wscrid=1137_16" class="h4">跑步</a>
+            <i class="vhr">|</i>
+            <a href="/n/420210672/?wscrid=1137_16" class="h4">美77岁老人坚持跑步15991天</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/c/24/?wscrid=1137_17" class="h4">NBA</a>
+            <i class="vhr">|</i>
+            <a href="/n/420195291/?wscrid=1137_17" class="h4">火箭再被挖角!快船签约海耶斯</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420232899/?wscrid=1137_18" class="h4">神吐槽:蠢cry!笨贼扮蓝精灵只为偷钱</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420199494/?wscrid=1137_19" class="h4">男子迷奸内地知名男模致死 被判18年</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420210648/?wscrid=1137_20" class="h4">"最悲伤作文"小学负责人被拘传|图</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420191415/?wscrid=1137_21" class="h4">派出所长骂问案情老汉:怎么不早点死</a>
+        </div>
+    </div>
+
+    <div id="g_loc_4" class="game_holder" style="transform-origin: 0px 0px 0px; opacity: 1; transform: scale(1, 1);">
+        <div class="it" data-gid="69">
+            <p class="h4">
+                <a href="http://game.m.sohu.com/detail/69/?_once_=000133_detail_69_homenews"> <b style="color:rgb(194, 0, 0)">《梦幻西游》暑期壕礼 狂送金条金羊</b>
+                </a>
+            </p>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/2/?_once_=000088_news" class="btn"> <b>进入新闻频道</b>
+    </a>
+</div>
+</div>
+
+<!-- 要闻区域 -->
+
+<!--搜索框+广告-->
+<section class="bannes">
+
+<div id="beans_12278" class="home_banner_text" data-msohu-money="true" style="display: block;">
+    <a href="javascript:;" data-url="http://jump.luna.58.com/s?spm=b-31580022738699-me-f-804&amp;ch=sohu_wap_zhaopin">I want you！高薪职位，快速入职！</a>
+</div>
+<div id="beans_12274" class="home_banner_img" data-msohu-money="true" style="display: block;">
+    <div class="home_banner_img">
+        <a href="javascript:;" data-url="http://thj521.com/c6.htm?cid=g91-2">
+            <img src="http://images.sohu.com/saf/a2015/0901/wKiDRFXlTd6AB8V2AACY_1mipJc922640x100.jpg"></a>
+    </div>
+</div>
+
+</section>
+<!--搜索框+广告-->
+
+<!--视频广告-->
+<section class="video_player"></section>
+
+<!-- 财经区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISEconomics">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/c/103/?_once_=000025_xiaodaohang_caijing_2v3">股票</a>
+            </li>
+            <li>
+                <a href="/c/22/?_once_=000025_xiaodaohang_caijing_3v3">理财</a>
+            </li>
+            <li>
+                <a href="http://m.sohu.com/f/M3MZNba/?_once_=000025_xiaodaohang_caijing_4v3">行情</a>
+            </li>
+        </menu>
+    </aside> <em><a href="/c/5/?_once_=000025_xiaodaohang_caijing_1v3">财经</a></em> 
+</h3>
+
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420237193/?wscrid=1140_1" class="h4">人民币或迎恶战 中国央行有大动作</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399693/?wscrid=1140_2" class="h4">李嘉诚超级计划全盘曝光 野心巨大</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399466/?wscrid=1140_3" class="h4">
+                <span style="color:rgb(51, 51, 51)">央视知名主持人纷纷离职 去向曝光</span>
+            </a>
+        </div>
+    </div>
+    <div class="it" id="beans_12417" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/556399688/?wscrid=1140_4" class="h4">
+                <span style="color:rgb(51, 51, 51)">方便面年销量惊人 中国占掉近一半</span>
+            </a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://www.jince.com/html/joinwechat1.html?qqid=11" class="h4">
+                <span class="generalize_label">推广</span>
+                每天送三支牛股 点击加微信
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399606/?wscrid=1140_5" class="h4">
+                <span style="color:rgb(51, 51, 51)">中日竞争高铁超级大单 日本被秒杀</span>
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420237945/?wscrid=1140_6" class="h4">
+                <span style="color:rgb(51, 51, 51)">宝马等遭投诉 一隐患已致13人丧生</span>
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420111170/?wscrid=1140_7" class="h4">中国警惕第三次移民潮:负面影响大</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399516/?wscrid=1140_8" class="h4">东南重镇爆发 或成国内第五直辖市</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399691/?wscrid=1140_9" class="h4">中国"藏"黄金9816吨 位居世界第二</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/5/?_once_=000088_finance" class="btn">
+        <b>进入财经频道</b>
+    </a>
+</div>
+</div>
+
+<div class="stock_hqnew">
+<div class="stock_zs" id="FT_index">
+    <a href="http://s.m.sohu.com/t/zs/001/000001.html">
+        上证指数
+        <span class="e1 stock_green">3166.62&nbsp;-39.36</span>
+    </a>
+    <a href="http://s.m.sohu.com/t/zs/001/399001.html">
+        深证成指
+        <span class="e1 stock_green">10162.52&nbsp;-386.64</span>
+    </a>
+    <a href="http://s.m.sohu.com/t/zs/001/000001.html">
+        上证指数
+        <span class="e1 stock_green">3166.62&nbsp;-39.36</span>
+    </a>
+    <a href="http://s.m.sohu.com/t/zs/001/399001.html">
+        深证成指
+        <span class="e1 stock_green">10162.52&nbsp;-386.64</span>
+    </a>
+</div>
+<span class="stock_more">
+    <a href="http://s.m.sohu.com/t/index.html">更多行情</a>
+</span>
+</div>
+<div class="stock_search">
+<ul>
+    <li class="stock_s1">
+        <form id="searchForm" method="get" action="http://s.m.sohu.com/t/search.html">
+            <i class="stock_txt"><input type="text" value="代码/中文/拼音缩写" name="paras" class="stock_kw"></i>
+        </form>
+    </li>
+    <li class="stock_s2">
+        <a id="smtbtn" title="查行情" class="stock_seabtn">查行情</a>
+    </li>
+    <li class="stock_s3">
+        <a href="http://s.m.sohu.com/t/mystock.html?v=3">我的自选</a>
+    </li>
+</ul>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12279" class="home_banner_text" data-msohu-money="true" style="display: block;">
+    <a href="javascript:;" data-url="http://jump.luna.58.com/s?spm=b-31580022738699-me-f-804&amp;ch=sohu_wap_fang">看房买房，在这一站就购了</a>
+</div>
+<div id="beans_12275" class="home_banner_img" data-msohu-money="true" style="display: block;">
+    <div class="home_banner_img">
+        <a href="javascript:;" data-url="http://e.eqxiu.com/s/h96vQwjQ#wechat_redirect">
+            <img src="http://images.sohu.com/saf/a2015/0819/wKiDRFXT3VCAQl5CAAA-qh3vsyI357640x100.jpg"></a>
+    </div>
+</div>
+
+</section>
+<!-- 财经区域 -->
+
+<!-- 娱乐区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISEntertainments" id="yulesohu">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/c/284/?_once_=000025_xiaodaohang_yule_2v3">电影</a>
+            </li>
+            <li>
+                <a href="/c/290/?_once_=000025_xiaodaohang_yule_3v3">电视</a>
+            </li>
+            <li>
+                <a href="/c/5947/?_once_=000025_xiaodaohang_yule_4v3">图库</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/4/?_once_=000025_xiaodaohang_yule_1v3">娱乐</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/680656/?wscrid=24820_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_16/b4tuak4861929954381.jpg" width="146" height="124"></i>
+            <p>"小雨"搂女友合影</p>
+        </a>
+
+        <a href="/p/680524/?wscrid=24820_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_9/a7o4ex3905797026596.jpg" width="146" height="124"></i>
+            <p>黄渤深夜街边啃香肠</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420237085/?wscrid=1142_1" class="h4">吴彦祖刘烨定亲家 两岁混血女儿萌爆</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420244090/?wscrid=1142_2" class="h4">孟非女儿美国留学行李被偷 微博求助</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680653/?wscrid=1142_3" class="h4">好像邓超啊!孙俪晒自拍照 搞怪表情</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12418" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/420228788/?wscrid=1142_4" class="h4">新广告法实施:天天Cindy被卡通替换</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://www.de175.com/h5/oil/?a=410008" class="h4">
+                <span class="generalize_label">推广</span>
+                上班炒股不如晚上炒石油赚钱
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680688/?wscrid=1142_5" class="h4">美人画中来!范冰冰穿深V 性感妩媚</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680553/?wscrid=1142_6" class="h4">李冰冰与外甥骑法拉利自行车秀美腿</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680680/?wscrid=1142_7" class="h4">杀姐姐马可女友曝光 遭吐槽:长得老</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/4/?_once_=000088_ent" class="btn">
+        <b>进入娱乐频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12281" class="home_banner_text"></div>
+
+</section>
+<!-- 娱乐区域 -->
+
+<!-- 体育区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISSports" id="tiyusohu">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/c/24/?_once_=000025_xiaodaohang_tiyu_2v3">NBA</a>
+            </li>
+            <li>
+                <a href="/c/82/?_once_=000025_xiaodaohang_tiyu_3v3">中超</a>
+            </li>
+            <li>
+                <a href="http://zhibo.m.sohu.com/#program/5?_once_=000025_xiaodaohang_tiyu_4v3">直播</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/3/?_once_=000025_xiaodaohang_tiyu_1v3">体育</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/680507/?wscrid=24885_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s7.rr.itc.cn/org/wapChange/20159_1_9/b17ju44025022303909.jpg" width="146" height="124"></i>
+            <p>97年妹子单手抓篮球</p>
+        </a>
+
+        <a href="/p/680709/?wscrid=24885_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_16/a7gx4o4924580361381.jpg" width="146" height="124"></i>
+            <p>小威展歌喉 合影名流</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420244371/?wscrid=1144_1" class="h4">世界杯朱挺复出中国女排3-0阿根廷</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420215895/?wscrid=1144_2" class="h4">世俱排名:恒大上涨11位 列亚洲第2</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420190168/?wscrid=1144_3" class="h4">9434万!骑士悍将最后通牒只签顶薪</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12419" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/c/17506/?wscrid=1144_4" class="h4">锐体育:奥登大帝加盟江苏男篮始末</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://tuiguang.51cailai.com" class="h4">
+                <span class="generalize_label">推广</span>
+                让利润放大5倍的炒股app
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420241963/?wscrid=1144_5" class="h4">郭艾伦回国家队曾做检讨 因私赴美国</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420179914/?wscrid=1144_6" class="h4">曝中甲队730万欧年薪邀前皇马主帅</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420183319/?wscrid=1144_7" class="h4">1240万欧!曼联官宣小豌豆加盟药厂</a>
+        </div>
+    </div>
+
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://m.sohu.com/c/28/?_once_=000025_top_caipiao_v3&amp;wscrid=79614_1" class="h4">沙区彩民“借好运”借来903万大奖</a>
+        </div>
+    </div>
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/3/?_once_=000088_sports" class="btn">
+        <b>进入体育频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12280" class="home_banner_text" data-msohu-money="true" style="display: block;">
+    <a href="javascript:;" data-url="http://www.sycf666.com/Wap/tj/index.html">看高手布局这三只牛股，坐等收钱</a>
+</div>
+
+</section>
+<!-- 体育区域 -->
+
+<!-- 军事区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISMilitary">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/cl/8/?_once_=000025_xiaodaohang_junshi_2v3">军情</a>
+            </li>
+            <li>
+                <a href="/cl/483/?_once_=000025_xiaodaohang_junshi_3v3">军史</a>
+            </li>
+            <li>
+                <a href="/c/527/?_once_=000025_xiaodaohang_junshi_4v3">图鉴</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/8/?_once_=000025_xiaodaohang_junshi_1v3">军事</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/10122698/?wscrid=43466_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_8/a3tdsb2773368758596.jpg" width="146" height="124"></i>
+            <p>战斗民族这样卖飞机</p>
+        </a>
+
+        <a href="/p/10122769/?wscrid=43466_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_9/a3gdmj3821326737596.jpg" width="146" height="124"></i>
+            <p>日本一绝密遭曝光</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399617/?wscrid=1150_1" class="h4">苏丹总统访华出席阅兵 外媒:"罕见"</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399672/?wscrid=1150_2" class="h4">美前防长:欲出兵亚洲的防长该查脑子</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399587/?wscrid=1150_3" class="h4">日媒批朴槿惠出席中国阅兵 韩国回应</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12420" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/419874591/?wscrid=1150_4" class="h4">外媒:南海981平台再出手 距越南百里</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://www.xiaoyoucai.com/sm.html?ex=shwzl" class="h4">
+                <span class="generalize_label">推广</span>
+                惊：投资1元享1万元收益！
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399634/?wscrid=1150_5" class="h4">日本民众"发大招" 安倍真快扛不住了</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399699/?wscrid=1150_6" class="h4">
+                <span style="color:rgb(51, 51, 51)">日本12万人包围国会 要把安倍赶下台</span>
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399540/?wscrid=1150_7" class="h4">中国阅兵是不是世界第一？媒体热议</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420212834/?wscrid=1150_8" class="h4">俄亿吨当量氢弹惊现街头 竟这样运输</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399553/?wscrid=1150_9" class="h4">南海争夺第一轮中国胜出 美澳没辙</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399667/?wscrid=1150_10" class="h4">总师:99A坦克世界领先 驾驶如轿车</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/8/?_once_=000088_mil" class="btn">
+        <b>进入军事频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12288" class="home_banner_text"></div>
+<div id="beans_12282" class="home_banner_img" data-msohu-money="true" style="display: block;">
+    <div class="home_banner_img">
+        <a href="javascript:;" data-url="http://lnk8.cn/FtUls8">
+            <img src="http://images.sohu.com/saf/a2015/0806/wKiDRFXDAaeAVQadAAB2Vg2_OB4610640x100.jpg"></a>
+    </div>
+</div>
+
+</section>
+<!-- 军事区域 -->
+
+<!-- 历史区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISHistory">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/cl/483/?_once_=000025_xiaodaohang_lishi_2v3">秘档</a>
+            </li>
+
+            <li>
+                <a href="/cl/195/?_once_=000025_xiaodaohang_lishi_3v3">人物</a>
+            </li>
+            <li>
+                <a href="/pl/586/?_once_=000025_xiaodaohang_lishi_4v3">影像</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/5100/?_once_=000025_xiaodaohang_lishi_1v3">历史</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/10122837/?wscrid=46669_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s7.rr.itc.cn/org/wapChange/20159_1_9/a3hj8y808265107451.jpg" width="146" height="124"></i>
+            <p>国人愤怒的日军自拍</p>
+        </a>
+
+        <a href="/p/10122945/?wscrid=46669_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20159_1_11/b6sj5y920632911451.jpg" width="146" height="124"></i>
+            <p>四川墓葬群太吓人</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399734/?wscrid=46653_1" class="h4">揭中国历朝历代阅兵 明朝的震惊世界</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399618/?wscrid=46653_2" class="h4">南京大屠杀罪行:一夜1000女性被凌辱</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399668/?wscrid=46653_3" class="h4">秦陵10大惊天谜团:兵马俑暗藏诅咒?</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12421" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/556399623/?wscrid=46653_4" class="h4">雍正严惩贪官:要让他子孙后代做穷人</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://k999.com.cn/bd/sohu/sjgg1/?sid=62&amp;refferid=20" class="h4">
+                <span class="generalize_label">推广</span>
+                白天炒股，晚上炒原油
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399671/?wscrid=46653_5" class="h4">元朝中期谁主宰天下?20多年换36皇帝</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399648/?wscrid=46653_6" class="h4">旧中国4大女匪首:最美女匪25岁枪决</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/5100/?_once_=000088_history" class="btn">
+        <b>进入历史频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12291" class="home_banner_text"></div>
+
+</section>
+<!-- 历史区域 -->
+
+<!-- 文化读书区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISBook">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/cl/16915/?_once_=000025_xiaodaohang_whds_2v3">偏见</a>
+            </li>
+            <li>
+                <a href="/cl/16916/?_once_=000025_xiaodaohang_whds_3v3">重磅</a>
+            </li>
+            <li>
+                <a href="/cl/16917/?_once_=000025_xiaodaohang_whds_4v3">我说</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/16879/?_once_=000025_xiaodaohang_whds_1v3">文化读书</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/642774/" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20159_1_14/a84xnn5982732679381.jpg" width="146" height="124"></i>
+            <p>小龙女原型竟是她?</p>
+        </a>
+
+        <a href="/n/420166608/" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_8/a05cbz6756658870381.jpg" width="146" height="124"></i>
+            <p>百万灵车送殡宠物狗</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420166608/?wscrid=85476_1" class="h4">子东时间：宠物狗为何不能豪华殡葬?</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420157536/?wscrid=85476_2" class="h4">揭秘德国出人出枪帮蒋介石痛揍日本</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420083805/?wscrid=85476_3" class="h4">光棍的性与痛：15万彩礼压垮农村人</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420206981/?wscrid=85476_4" class="h4">烈日灼心：注射死刑成为警匪片噱头</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420222907/?wscrid=85476_5" class="h4">揭秘泰坦尼克号“最后午餐”菜单</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/419617352/?wscrid=85476_6" class="h4">抗日最早大捷:日本王牌军几遭团灭</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420230808/?wscrid=85476_7" class="h4">赵丽华画画 莫言:和村里大嫂画得像</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/16879/?_once_=000088_whds" class="btn">
+        <b>进入文化读书频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes"></section>
+<!-- 文化读书区域 -->
+
+<!-- 女人区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISWomen">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/c/326/?_once_=000025_xiaodaohang_nvren_2v3">时尚</a>
+            </li>
+            <li>
+                <a href="/c/16085/?_once_=000025_xiaodaohang_nvren_3v3">健康</a>
+            </li>
+            <li>
+                <a href="/c/16084/?_once_=000025_xiaodaohang_nvren_4v3">旅游</a>
+            </li>
+            <li>
+                <a href="/c/16246/?_once_=000025_xiaodaohang_nvren_5v3">教育</a>
+            </li>
+        </menu>
+    </aside>
+    <em>生活</em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/n/420181872/?wscrid=26242_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_17/a2ncd67840550937381.jpg" width="146" height="124"></i>
+            <p>成都老茶馆里慢生活</p>
+        </a>
+
+        <a href="/n/420081911/?wscrid=26242_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_17/a6usuq7850671420381.jpg" width="146" height="124"></i>
+            <p>小团队，大能量</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420150208/?wscrid=1146_1" class="h4">秋冬囤货季开始 围巾三条就足够</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420197898/?wscrid=1146_2" class="h4">秋季养人的时令水果之葡萄</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420092920/?wscrid=1146_3" class="h4">岘港 最美的海滩 最炫的日出</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12422" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/420117086/?wscrid=1146_4" class="h4">2015初秋背带裤潮流继续蔓延</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="https://m.yonglibao.com/?utm_source=souhu_display&amp;utm_medium=cpc&amp;utm_content=textlink&amp;utm_campaign=wap_wzl13-1" class="h4">
+                <span class="generalize_label">推广</span>
+                永利宝 注册即送100元
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420069611/?wscrid=1146_5" class="h4">七夕 香糯清甜的玉米小米汤水</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420127755/?wscrid=1146_6" class="h4">18个超简单实用的剪纸游戏</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420144768/?wscrid=1146_7" class="h4">通过辅食强化铁的几个提醒</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/326/?_once_=000088_fashion" class="btn">
+        <b>进入时尚频道</b>
+    </a>
+    <a href="/c/16085/?v=3&amp;_once_=000088_health" class="btn">
+        <b>进入健康频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12289" class="home_banner_text"></div>
+
+</section>
+<!-- 女人区域 -->
+
+<!-- 科技区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISTechnology">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/ca/?channel=it&amp;index=0&amp;v=3&amp;_once_=000025_xiaodaohang_keji_2v3">移动互联</a>
+            </li>
+            <li>
+                <a href="/ca/?channel=it&amp;index=1&amp;v=3&amp;_once_=000025_xiaodaohang_keji_3v3">通信</a>
+            </li>
+            <li>
+                <a href="/ca/?channel=it&amp;index=2&amp;v=3&amp;_once_=000025_xiaodaohang_keji_4v3">IT产业</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/16430/?v=3&amp;_once_=000025_xiaodaohang_keji_1v3">科技</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/n/420203624/?wscrid=26299_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s7.rr.itc.cn/org/wapChange/20159_1_9/b1hlhk3804783603596.jpg" width="146" height="124"></i>
+            <p>iPhone6s卖649美元</p>
+        </a>
+
+        <a href="/n/420202736/?wscrid=26299_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20159_1_9/b5brda3807995682596.jpg" width="146" height="124"></i>
+            <p>三星发Gear S2手表</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420176593/?wscrid=1152_1" class="h4">富士康的"印度梦" 不甘于沦为代工厂</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420178708/?wscrid=1152_2" class="h4">
+                <span style="color:rgb(51, 51, 51)">偷情网站被黑 互联网下如何保护自己</span>
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420181673/?wscrid=1152_3" class="h4">无人驾驶汽车上路 国内也开始测试了</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12423" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/420180451/?wscrid=1152_4" class="h4">前仆后继的智能音响:被挤爆了的入口</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://wvw.sjzawj.com/detial/item/ydcxsc/?wp-wz-13-0807" class="h4">
+                <span class="generalize_label">推广</span>
+                越南精品沉香手串 越戴越香
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420201806/?wscrid=1152_5" class="h4">苹果新手机这次不会在中国市场热销</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420177720/?wscrid=1152_6" class="h4">史上功能最多的背包,看完你就想换包</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/16430/?v=3&amp;_once_=000088_it" class="btn">
+        <b>进入科技频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12290" class="home_banner_text"></div>
+
+</section>
+<!-- 科技区域 -->
+
+<!-- 汽车区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISAuto">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="http://db.m.auto.sohu.com">选车</a>
+            </li>
+            <li>
+                <a href="http://db.m.auto.sohu.com/jiangjia/0-0-0-all-all-td-0.shtml">降价</a>
+            </li>
+            <li>
+                <a href="/c/15264/?_once_=000025_xiaodaohang_qiche_4v3">查违章</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/1592/?_once_=000025_xiaodaohang_qiche_1v3">汽车</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/n/420165945/?wscrid=26310_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20159_1_7/a0yvhy8480763140596.jpg" width="146" height="124"></i>
+            <p>4款紧凑SUV 12万起</p>
+        </a>
+
+        <a href="/n/420165075/?wscrid=26310_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s7.rr.itc.cn/org/wapChange/20159_1_7/a8nd8p2803106405381.jpg" width="146" height="124"></i>
+            <p>历年中国阅兵车盘点</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420214446/?wscrid=12618_1" class="h4">2016款宝骏730 售价7.58-8.98万元</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420163696/?wscrid=12618_2" class="h4">7月MPV销量:五菱宏光夺冠GL8第四</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420230877/?wscrid=12618_3" class="h4">亲民好开小型SUV 试驾Jeep自由侠</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12424" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/420155762/?wscrid=12618_4" class="h4">新手孕妇切勿开车 孕期驾车十大不可</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://www.smyfinancial.com/?qd=souhu3" class="h4">
+                <span class="generalize_label">推广</span>
+                信用卡如何每月少还1000
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420212263/?wscrid=12618_5" class="h4">全都超省油?日本人最喜欢的10款车</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<section class="cnl">
+<section class="ls">
+    <div class="it">
+        <div style="border-top:1px dashed #D6D6D6" class="h4WP">
+            <a href="
+http://m.2sc.sohu.com/" class="h4">机不可失！丰田汉兰达13.8万元(图)</a>
+        </div>
+    </div>
+</section>
+</section>
+
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/1592/?_once_=000088_auto" class="btn">
+        <b>进入汽车频道</b>
+    </a>
+    <a href="http://m.2sc.sohu.com/" class="btn">
+        <b>进入二手车频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12292" class="home_banner_text"></div>
+
+</section>
+<!-- 汽车区域 -->
+
+<!-- 星座笑话区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISZodiac">
+    <em>
+        <a href="/c/9/?_once_=000025_xiaodaohang_xingzuo_1v3">星座</a>
+        <i class="vhr">·</i>
+        <a href="/c/1393/?_once_=000025_xiaodaohang_xiaohua_1v3">笑话</a>
+    </em>
+</h3>
+
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/c/3021/?wscrid=1148_1" class="h4">9.2运势:双子好运连连 射手宜理财</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420215212/?wscrid=1148_2" class="h4">月运:判答-9月12星座运势详细解读</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420142015/?wscrid=1148_3" class="h4">周运:曼陀罗华-本周12星座运势揭晓</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12425" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/p/10097455/?hk=1024&amp;gi=joke&amp;wscrid=20810_1" class="h4">[亮瞎]可以请我吃一碗麻辣香爱疯吗</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://m.trjcn.com/tg.html?trackid=ads:sohu213rh31" class="h4">
+                <span class="generalize_label">推广</span>
+                如何像马云一样获得资本宠爱
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556399555/?hk=1024&amp;gi=joke&amp;wscrid=20810_2" class="h4">[狐诌837季]臀部突然被双大手托住</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/556367139/?hk=1024&amp;gi=joke&amp;wscrid=20810_3" class="h4">[冷知识]知道乌鸦为什么不喜欢你吗</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://read.m.sohu.com/category/8/?_once_=000100_rk_xbt2" class="h4">游戏</a>
+            <i class="vhr">|</i>
+            <a href="http://read.m.sohu.com/book/217298/?c=2&amp;_once_=000100_rk_tg8" class="h4">很纯很卖萌:钻石富豪来相亲</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://read.m.sohu.com/category/7/?_once_=000100_rk_xbt6" class="h4">科幻</a>
+            <i class="vhr">|</i>
+            <a href="http://read.m.sohu.com/book/120127/?c=2&amp;_once_=000100_rk_tg4" class="h4">错惹霸道总裁:老公太凶猛</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://read.m.sohu.com/category/5/?_once_=000100_rk_xbt7" class="h4">玄幻</a>
+            <i class="vhr">|</i>
+            <a href="http://read.m.sohu.com/book/217412/?c=2&amp;_once_=000100_rk_tg3" class="h4">利刃:退役特种兵的美女上司</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/9/?_once_=000088_astro" class="btn">
+        <b>进入星座频道</b>
+    </a>
+    <a href="/c/1393/?_once_=000088_joke" class="btn">
+        <b>进入笑话频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes"></section>
+<!-- 星座笑话区域 -->
+
+<!-- 社会区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISSociety">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/cl/60/?_once_=000025_xiaodaohang_shehui_2v3">万象</a>
+            </li>
+            <li>
+                <a href="/cl/64/?_once_=000025_xiaodaohang_shehui_3v3">博览</a>
+            </li>
+            <li>
+                <a href="/cl/2686/?_once_=000025_xiaodaohang_shehui_4v3">评论</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/c/53/?_once_=000025_xiaodaohang_shehui_1v3">社会</a>
+    </em>
+</h3>
+
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420181192/?wscrid=1154_1" class="h4">江西最牛违章车:违章253条 扣846分</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420209444/?wscrid=1154_2" class="h4">选美内衣秀插糖葫芦 网友:放过传统</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420194971/?wscrid=1154_3" class="h4">14岁女孩遭性侵致三次怀孕 被迫生子</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12426" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/n/556399603/?wscrid=1154_4" class="h4">女司机把钱包放车顶 百元大钞一路飘</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://m.liansuo.com/p/index/134944.html?comeID=26499" class="h4">
+                <span class="generalize_label">推广</span>
+                芽苗菜种植 年赚百万！
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420209962/?wscrid=1154_5" class="h4">台北女优版交通卡脱销 订购专线打爆</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/n/420173644/?wscrid=1154_6" class="h4">没吸管 女顾客用火锅汤泼怀孕服务员</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/53/?_once_=000088_society" class="btn">
+        <b>进入社会频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes">
+
+<div id="beans_12293" class="home_banner_text"></div>
+
+</section>
+<!-- 社会区域 -->
+
+<!-- 图库区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISPictures">
+    <em>
+        <a href="/c/5933/?_once_=000025_xiaodaohang_pics_1v3">图库</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="/p/680481/?wscrid=74793_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20159_1_10/b549qe415348368451.jpg" width="146" height="124"></i>
+            <p>17辆车连环相撞</p>
+        </a>
+
+        <a href="/p/680491/?wscrid=74793_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s8.rr.itc.cn/org/wapChange/20159_1_10/a6ocbc9110214566596.jpg" width="146" height="124"></i>
+            <p>乌议会外警民冲突</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680562/?wscrid=74794_1" class="h4">沪70对情侣再现“世纪之吻”经典画面</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680536/?wscrid=74794_2" class="h4">“伊斯兰国”再炸毁2000年历史神庙</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/p/680291/?wscrid=74794_3" class="h4">西班牙森林大火  附近居民紧急撤离</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12427" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/p/680253/?wscrid=74794_4" class="h4">悉尼最古老的货运铁道变成步行道</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://wqc.so/55e157cf4c04b" class="h4">
+                <span class="generalize_label">推广</span>
+                做微商必学的吸粉技巧
+            </a>
+        </div>
+    </div>
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="/c/5933/?_once_=000088_pics" class="btn">
+        <b>进入图库频道</b>
+    </a>
+</div>
+</div>
+
+<!-- 图库区域 -->
+
+<!-- 视频区域 -->
+<section class="cnl">
+<h3 class="h ht1 adISVideos">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="/n/500023176/?_once_=000025_xiaodaohang_shipin_2v3">电视</a>
+            </li>
+            <li>
+                <a href="http://m.tv.sohu.com/self?_once_=000025_xiaodaohang_shipin_3v3">出品</a>
+            </li>
+            <li>
+                <a href="/n/500023178/?_once_=000025_xiaodaohang_shipin_4v3">综艺</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="/sr/?_once_=000025_xiaodaohang_shipin_1v3&amp;redirect_url=http://m.tv.sohu.com/">视频</a>
+    </em>
+</h3>
+
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/eAFvUva/?wscrid=3037_1" class="h4">蟑螂溜进男子耳朵 孵出26只小蟑螂</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/fQZru2a/?wscrid=3037_2" class="h4">台湾男子迷奸多名大陆男模致死1人</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/73Uvema1441068547/?wscrid=3037_3" class="h4">韩综新高度:过山车吃炸酱面甩一脸</a>
+        </div>
+    </div>
+    <div class="it" id="beans_12428" style="display: block; overflow: hidden; height: 43px;">
+        <div class="h4WP infoFlowAnimate">
+            <a href="/f/7FZRfia1441068548/?wscrid=3037_4" class="h4">网曝《跑男3》首站洛阳 郭采洁加盟</a>
+        </div>
+        <div class="h4WP infoFlowAnimate" data-msohu-money="true">
+            <a href="javascript:;" data-url="http://m.gwfx.com/m_lp_xinshou_v2_1.html?utm_source=md55&amp;utm_medium=cpc&amp;utm_campaign=wap1&amp;utm_content=wz&amp;utm_term=wz" class="h4">
+                <span class="generalize_label">推广</span>
+                注册送25+200美元
+            </a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/J7feqqa/?wscrid=3037_5" class="h4">开学季到来!学渣花千骨被学霸纠缠</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/faaeQ3a/?wscrid=3037_6" class="h4">醉酒孕妇大闹拉斯维加斯游泳池派对</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="http://m.sohu.com/f/mtv/?_once_=000088_tv" class="btn">
+        <b>进入视频频道</b>
+    </a>
+</div>
+</div>
+
+<section class="bannes"></section>
+<!-- 视频区域 -->
+
+<!--焦点房产区域-->
+<section class="cnl" id="jiaodian">
+<h3 class="h ht1">
+    <aside class="rightTip">
+        <p class="siteTip btns">
+            <a href="javascript:;" class="btn btn2">
+                <i class="home_i i01"></i>
+                <b>GPS定位</b>
+            </a>
+        </p>
+    </aside>
+    <em>
+        <a href="http://m.sohu.com/f/jiaodian2/?_once_=000025_xiaodaohang_jiaodian_1v3">房产</a>
+    </em>
+</h3>
+<div class="it">
+    <section class="pl pl_c2">
+        <a href="http://m.focus.cn/bj/zixun/10365670/?channelId=363" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://dcimg.f.itc.cn/q_70/app/76/762b0ef6c9f80a7938217ef67b2a574a.jpg" width="146" height="124"></i>
+            <p>李嘉诚豪宅俨如堡垒</p>
+        </a>
+        <a href="http://m.focus.cn/bbsbj/1569/345918223.html?channelId=363" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://dcimg.f.itc.cn/q_70/app/50/501011f99c26fa27e6233d87c9e04d67.jpg" width="146" height="124"></i>
+            <p>一天造10栋建筑</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/uuaiEba/" class="h4">球星詹姆斯炒房5年净赚440万</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/Qnya2ya/" class="h4">任志强:楼市仍有降息降准空间</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/U7RrUba/" class="h4">你造吗？100万能买四环"豪"宅</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/fAzM7ja/" class="h4">绝对靠谱你信吗？15万住朝阳</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/BBNN3ua/" class="h4">揭秘买了毁一生的14种凶煞房</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="/f/fUNZnaa/" class="h4">家里各种线太杂乱？这么收拾就对了</a>
+        </div>
+    </div>
+</section>
+<div class="btns cnlPopBtn">
+    <div class="cnlPopBtnWrap">
+        <a href="http://m.sohu.com/f/jiaodian3/?_once_=000088_jiaodian" class="btn">
+            <b>进入房产频道</b>
+        </a>
+    </div>
+</div>
+</section>
+<!--焦点房产区域-->
+
+<!-- 游戏区域 -->
+<section class="cnl">
+<h3 class="h ht1">
+    <aside>
+        <menu class="sep">
+            <li>
+                <a href="http://game.m.sohu.com/rank/newest/?_once_=000133_center_rank_mostminnav">最新</a>
+            </li>
+            <li>
+                <a href="http://game.m.sohu.com/rank/download/?_once_=000133_center_rank_newminnav">排行</a>
+            </li>
+        </menu>
+    </aside>
+    <em>
+        <a href="http://game.m.sohu.com?_once_=000133_center_recommend_minnav">游戏</a>
+    </em>
+</h3>
+
+<div class="it">
+    <section class="pl pl_c2">
+
+        <a href="http://game.m.sohu.com/detail/142/?v=3&amp;_once_=000133_detail_142_homepic&amp;wscrid=82159_1" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20158_3_18/b75opg6225079913381.jpg" width="146" height="124"></i>
+            <p>正版授权 女神代言</p>
+        </a>
+
+        <a href="http://game.m.sohu.com/detail/50/?v=3&amp;_once_=000133_detail_50_homepic&amp;wscrid=82159_2" class="h4">
+            <i class="img">
+                <img src="http://s1.rr.itc.cn/p/images/imgloading.jpg" original="http://s9.rr.itc.cn/org/wapChange/20156_17_11/a4zpdw0000921449519.jpg" width="146" height="124"></i>
+            <p>高能活动 澎湃来袭</p>
+        </a>
+    </section>
+</div>
+<section class="ls">
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/124/?v=3&amp;_once_=000133_detail_124_hometext&amp;wscrid=84107_1" class="h4">《龙与精灵》7日晚18点新服火爆开启</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/69/?v=3&amp;_once_=000133_detail_69_hometext&amp;wscrid=84107_2" class="h4">《梦幻西游》全民PK 赢取50万大奖</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/50/?v=3&amp;_once_=000133_detail_50_hometext&amp;wscrid=84107_3" class="h4">《战舰帝国》豪华银河礼包豪礼放送</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/46/?v=3&amp;_once_=000133_detail_46_hometext&amp;wscrid=84107_4" class="h4">《黄金圣斗士》送五小强豪华礼包</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/94/?v=3&amp;_once_=000133_detail_94_hometext&amp;wscrid=84107_5" class="h4">《新仙剑奇侠传》七夕独家礼包上线</a>
+        </div>
+    </div>
+    <div class="it">
+        <div class="h4WP">
+            <a href="http://game.m.sohu.com/detail/142/?v=3&amp;_once_=000133_detail_142_hometext&amp;wscrid=84107_6" class="h4">《花千骨》七成玩家是妹子还不来玩?</a>
+        </div>
+    </div>
+
+</section>
+</section>
+<div class="btns cnlPopBtn">
+<div class="cnlPopBtnWrap">
+    <a href="http://game.m.sohu.com/?_once_=000133_center_recommend_bottomgame" class="btn">
+        <b>进入游戏中心</b>
+    </a>
+</div>
+</div>
+
+<!--百事通-->
+<section class="tools_list">
+<h3 class="h ht1">
+    <em>
+        <a href="javascript:;">百事通</a>
+    </em>
+</h3>
+<ul>
+    <li>
+        <a href="http://m.sohu.com/f/mQfauya/?_once_=000149_sybst01">
+            <span class="tool_icon ic1"></span>
+            <span class="tool_words">找工作</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/rUjuU3a/?_once_=000149_sybst02">
+            <span class="tool_icon ic6"></span>
+            <span class="tool_words">租好房</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/JBnaIva/?_once_=000149_sybst03">
+            <span class="tool_icon ic10"></span>
+            <span class="tool_words">二手房</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/UFF3u2a/?_once_=000149_sybst04">
+            <span class="tool_icon ic5"></span>
+            <span class="tool_words">二手车</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/U32Ynaa/?_once_=000149_sybst05">
+            <span class="tool_icon ic3"></span>
+            <span class="tool_words">淘二手</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/F3qEfia/?_once_=000149_sybst06">
+            <span class="tool_icon ic7"></span>
+            <span class="tool_words">买萌宠</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/7nEB7fa/?_once_=000149_sybst07">
+            <span class="tool_icon ic8"></span>
+            <span class="tool_words">找保洁</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/rIzUrya/?_once_=000149_sybst08">
+            <span class="tool_icon ic2"></span>
+            <span class="tool_words">租好车</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/BJVBRja/?_once_=000149_sybst09">
+            <span class="tool_icon ic9"></span>
+            <span class="tool_words">找保姆</span>
+        </a>
+    </li>
+    <li>
+        <a href="http://m.sohu.com/f/MFbyaua/?_once_=000149_sybst10">
+            <span class="tool_icon ic4"></span>
+            <span class="tool_words">淘手机</span>
+        </a>
+    </li>
+</ul>
+</section>
+
+<!-- 游戏区域 -->
+<div id="beans_13455" class="iframe-money hm-btm-ifm-mny" data-msohu-money="true">
+<iframe style="width: 100%; margin: 0px auto; vertical-align: top; height: 56.25px;" frameborder="0" marginwidth="0" marginheight="0" margin="0 auto;" scrolling="no" src="http://images.sohu.com/bill/s2015/jd/jd_1169.html"></iframe>
+</div>
+<section class="reTop">
+<a href="javascript:window.scrollTo(0,0);" class="btn btn1">
+    <i class="i iF iF1"></i>
+    返回顶部
+</a>
+<!--点击时为按钮a增加class：on-->
+</section>
+
+<!--footer-->
+<footer class="site">
+<nav class="foo" style="background-color:#333333;">
+    <a href="/c/395/?_once_=000025_zhitongche_daohang_v3">导航</a>
+    <a href="/c/2/?_once_=000025_zhitongche_xinwen_v3">新闻</a>
+    <a href="/c/4/">娱乐</a>
+    <a href="/c/3/">体育</a>
+    <a href="/c/5/">财经</a>
+    <a href="/c/5933/">图库</a>
+</nav>
+
+<section class="func">
+    <a href="?v=2&amp;_once_=sohu_version_2">彩版</a>
+    <a href="#" class="on">触版</a>
+    <a href="http://m.sohu.com/towww">PC版</a>
+    <a href="/c/6255/?_once_=000058_v3">客户端</a>
+</section>
+<p class="inf">
+    <a href="/help/">留言</a>
+    <i class="hyp">-</i>
+    <a href="/c/432/">合作</a>
+    <i class="hyp">-</i>
+    <a href="/c/15150/">招聘</a>
+</p>
+<p class="cop">Copyright © 2015 Sohu.com</p>
+
+</footer>
+<!--footer-->
+</div>
+
+<!--js-->
+<script crossorigin="" type="text/javascript">
+            window.addToHomeConfig = {
+            autostart: false,
+            touchIcon: true,
+            animationIn: 'fade',
+            expire: 14*24*60*60,
+            lifespan: 1*60*1000,
+            //touchIconUrl: 'http://s8.rr.itc.cn/org/wapChange/201312_18_11/b416x0616935499093.png',
+            message: '<strong>添加 搜狐网 到桌面</strong>点击 %icon <br>选择“添加到主屏幕”',
+            initCallback: function() {Statistics.addStatistics('000015_open');},
+            clickedCallback: function() {Statistics.addStatistics('000015_close');},
+                sogou_push: "True"
+            };
+        </script>
+
+<script crossorigin="" type="text/javascript" src="./script/new-slide.js"></script>
+<script crossorigin="" type="text/javascript" src="./script/main.js"></script>
+
+</body>
+</html>
