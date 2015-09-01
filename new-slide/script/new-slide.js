@@ -99,8 +99,11 @@
         this.el.style.overflow = 'hidden';
 
         this.wrap = this.wrapSelector ? this.el.querySelector(this.wrapSelector): this.el.children[0];
-        this.wrap.style.cssText = cssVendor + 'transform:translate3d(' + (-this.getItemWidth() * this.activeIndex) + 'px,0px,0px);' + cssVendor + 'transition:' + cssVendor + 'transform 0ms;';
+        // this.wrap.style.cssText = cssVendor + 'transform:translate3d(' + (-this.getItemWidth() * this.activeIndex) + 'px,0px,0px);' + cssVendor + 'transition:' + cssVendor + 'transform 0ms;';
         this.items = slice.call(this.wrap.children, 0);
+        this.items.forEach(function(value, index){
+            value.setAttribute('data-index', index);
+        });
 
         if (this.prevSelector) {
             this.prevEl = typeof this.prevSelector === 'string' ? document.querySelector(this.prevSelector) : this.prevSelector;
