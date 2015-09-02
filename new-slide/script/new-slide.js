@@ -1,6 +1,7 @@
 /**
  *
  * 例子参见：http://maxzhang.github.io/carousel-widget/dev/examples/slide.html
+ * 基于slide组件进行改进，增加了循环播放的功能和自适应屏幕大小的功能
  *
  */
 (function(window) {
