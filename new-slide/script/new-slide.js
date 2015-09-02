@@ -118,11 +118,12 @@
             this.indicators = slice.call(this.indicators, 0);
         }
 
-        window.addEventListener( 'onorientationchange' in window ? 'orientationchange' : 'resize', (function(that){
+        this._resetInitPosition = (function(that){
             return function() {
                 that.setInitPosition.call(that);
             };   
-        })(this) , false );
+        })(this);
+        window.addEventListener( 'onorientationchange' in window ? 'orientationchange' : 'resize', this._resetInitPosition, false );
 
         this.el.addEventListener(TOUCH_EVENTS.start, this, false);
 
@@ -615,6 +616,7 @@
             this.el.removeEventListener(TOUCH_EVENTS.start, this, false);
             this.el.removeEventListener(TOUCH_EVENTS.move, this, false);
             this.el.removeEventListener(TOUCH_EVENTS.end, this, false);
+            window.removeEventListener( 'onorientationchange' in window ? 'orientationchange' : 'resize', this._resetInitPosition, false );
             this.el = this.wrap = this.items = null;
             this.iscroll = null;
         }
