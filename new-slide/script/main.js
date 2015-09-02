@@ -14,12 +14,12 @@
 				this.prevEl.children[0].style.opacity = '';
 				this.nextEl.children[0].style.opacity = '';
 			}
-			window.onresize = function() {
+			/*window.onresize = function() {
 				document.querySelector("#topic-swipe").style.transform = "translate3d(-" + (document.body.clientWidth * index) + "px, 0px, 0px)";
 				for (var i = 0; i < document.querySelectorAll(".topic-item").length; i++) {
 					document.querySelectorAll(".topic-item")[i].style.left = document.documentElement.clientWidth * i + "px";
 				}
-			};
+			};*/
 		}
 	};
 

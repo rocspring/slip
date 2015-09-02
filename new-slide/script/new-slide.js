@@ -47,7 +47,7 @@
         addClass = function(elem, value) {
             var classes, cur, clazz, i;
             classes = (value || '').match(/\S+/g) || [];
-            cur = elem.nodeType === 1 && ( elem.className ? (' ' + elem.className + ' ').replace(/[\t\r\n]/g, ' ') : ' ');
+            cur = elem.nodeType === 1 && (elem.className ? (' ' + elem.className + ' ').replace(/[\t\r\n]/g, ' ') : ' ');
             if (cur) {
                 i = 0;
                 while ((clazz = classes[i++])) {
@@ -61,7 +61,7 @@
         removeClass = function(elem, value) {
             var classes, cur, clazz, i;
             classes = (value || '').match(/\S+/g) || [];
-            cur = elem.nodeType === 1 && ( elem.className ? (' ' + elem.className + ' ').replace(/[\t\r\n]/g, ' ') : ' ');
+            cur = elem.nodeType === 1 && (elem.className ? (' ' + elem.className + ' ').replace(/[\t\r\n]/g, ' ') : ' ');
             if (cur) {
                 i = 0;
                 while ((clazz = classes[i++])) {
@@ -98,10 +98,10 @@
         if (msPointerEnabled) this.el.style.msTouchAction = 'pan-y';
         this.el.style.overflow = 'hidden';
 
-        this.wrap = this.wrapSelector ? this.el.querySelector(this.wrapSelector): this.el.children[0];
+        this.wrap = this.wrapSelector ? this.el.querySelector(this.wrapSelector) : this.el.children[0];
         // this.wrap.style.cssText = cssVendor + 'transform:translate3d(' + (-this.getItemWidth() * this.activeIndex) + 'px,0px,0px);' + cssVendor + 'transition:' + cssVendor + 'transform 0ms;';
         this.items = slice.call(this.wrap.children, 0);
-        this.items.forEach(function(value, index){
+        this.items.forEach(function(value, index) {
             value.setAttribute('data-index', index);
         });
 
@@ -119,6 +119,8 @@
         }
 
         this.el.addEventListener(TOUCH_EVENTS.start, this, false);
+
+        this.setInitPosition();
 
         this.to(this.activeIndex, true);
 
@@ -216,10 +218,34 @@
                 next = 0;
             }
             return {
-                prev : prev,
+                prev: prev,
                 next: next,
                 active: index
             };
+        },
+
+
+        /**
+         *开始设置初始位置，使得各个图片的起始位置在同一个位置
+         */
+        setInitPosition: function() {
+            var me = this,
+                itemWidth = me.getItemWidth(),
+                items = this.items,
+                len = items.length,
+                i,j;
+
+            for (i = len - 1; i >= 0; i--) {
+                items[i].style['left'] = -itemWidth * i + 'px';
+            }
+
+            me._move(len - 1, 0, -itemWidth);
+            me._move(0, 0, 0);
+
+            for(j = len - 2; j > 0; j--){
+                me._move(j, 0, itemWidth);
+            }
+        
         },
 
         /**
@@ -291,19 +317,24 @@
          * 切换到index
          * @param {Number} toIndex
          * @param {Boolean} silent 无动画效果
+         * @param {Boolean} isSlideRight 是否向右滑动
          */
-        to: function(toIndex, silent) {
+        to: function(toIndex, silent, isSlideRight) {
             var active = this.activeIndex,
                 last = this.getLastIndex();
             if (toIndex >= 0 && toIndex <= last && toIndex != active && this.beforeSlide(toIndex) !== false) {
-                this.slide(toIndex, silent);
+                this.slide(toIndex, silent, isSlideRight);
+            } else if (toIndex === last + 1) {
+                this.slide(0, silent, isSlideRight);
+            } else if (toIndex === -1) {
+                this.slide(last, silent, isSlideRight);
             } else {
-                this.slide(active, silent);
+                this.slide(active, silent, isSlideRight);
             }
         },
 
         // private
-        slide: function(toIndex, silent) {
+        slide: function(toIndex, silent, isSlideRight) {
             var me = this,
                 active = me.activeIndex,
                 lastActive = active,
@@ -316,20 +347,72 @@
                     }
                     me.onSlide(me.activeIndex);
                 };
-            me.activeIndex = toIndex;
 
             if (!silent) listenTransition(me.wrap, me.duration, handler);
-            me._slip(toIndex, silent);
+
+            me._slipNext(toIndex, silent, isSlideRight);
             // me.wrap.style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
             // me.wrap.style[transform] = 'translate3d(' + (-me.getItemWidth() * toIndex) + 'px, 0px, 0px)';
             if (silent) handler();
         },
 
+        //private
+        _move: function(index, speed, distance) {
+            var me = this,
+                items = this.items,
+                lastIndex = me.getLastIndex();
+
+            if (index < 0 || index > lastIndex) {
+                return;
+            }
+
+            items[index].style[transitionDuration] = speed + 'ms';
+            items[index].style[transform] = 'translate3d(' + distance + 'px, 0px, 0px)';
+        },
+
         // private
-        _slip: function(index, silent) {
+        _slipNext: function(toIndex, silent, isSlideRight) {
+
+            var me = this,
+                activeIndex = me.activeIndex,
+                itemWidth = me.getItemWidth(),
+                lastIndex = me.getLastIndex(),
+                trueIndex = toIndex,
+                items = this.items,
+                itemsLen = items.length,
+                prevIndex = trueIndex === 0 ? itemsLen - 1 : trueIndex - 1,
+                nowIndex = trueIndex,
+                nextIndex = trueIndex < itemsLen - 1 ? trueIndex + 1 : 0,
+                speed = silent ? 0 : me.duration;
+
+            // 向右滑动
+            // 有三种情况:
+            // 1.正常的滑动到下一帧 (第一帧滑到最后一帧需要特别的写出来)
+            // 2.最后一帧滑动到第一帧
+            // 3.向左滑动的时候，没有触发滑到上一帧，然后回到touchstart的起始位置
+            if ( (toIndex > activeIndex && activeIndex !== lastIndex && activeIndex !== 0) ||
+                 (activeIndex === 0 && toIndex === 1) ||
+                (toIndex === 0 && activeIndex === lastIndex) ||
+                (toIndex === activeIndex && !isSlideRight) ) {
+                me._move(prevIndex, speed, -itemWidth);
+                me._move(nowIndex, speed, 0);
+                me._move(nextIndex, 0, itemWidth);
+            } else { // 向左滑动
+                me._move(prevIndex, 0, -itemWidth);
+                me._move(nowIndex, speed, 0);
+                me._move(nextIndex, speed, itemWidth);
+            }
+
+            me.activeIndex = toIndex;
+
+        },
+
+        // private
+        _slipDistance: function(index, distance) {
             var me = this,
                 items = this.items,
                 itemsLen = items.length,
+                itemWidth = me.getItemWidth(),
                 prevIndex = index === 0 ? itemsLen - 1 : index - 1,
                 nowIndex = index,
                 nextIndex = index < itemsLen - 1 ? index + 1 : 0;
@@ -338,20 +421,9 @@
             items[nowIndex].style[transitionDuration] = '0ms';
             items[nextIndex].style[transitionDuration] = '0ms';
 
-            items[prevIndex].style[transform] = 'translate3d(' + (-me.getItemWidth()) + 'px, 0px, 0px)';
-            items[nowIndex].style[transform] = 'translate3d(0px, 0px, 0px)';
-            items[nextIndex].style[transform] = 'translate3d(' + me.getItemWidth() + 'px, 0px, 0px)';
-
-            items[prevIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
-            items[nowIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
-            items[nextIndex].style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
-
-            items[prevIndex].style[transform] = 'translate3d(' + (-me.getItemWidth() * 2) + 'px, 0px, 0px)';
-            items[nowIndex].style[transform] = 'translate3d(' + (-me.getItemWidth()) + 'px, 0px, 0px)';
-            items[nextIndex].style[transform] = 'translate3d(0px, 0px, 0px)';
-
-
-
+            items[prevIndex].style[transform] = 'translate3d(' + (-itemWidth - distance) + 'px, 0px, 0px)';
+            items[nowIndex].style[transform] = 'translate3d(' + (-distance) + 'px, 0px, 0px)';
+            items[nextIndex].style[transform] = 'translate3d(' + (itemWidth - distance) + 'px, 0px, 0px)';
         },
 
         // private
@@ -434,13 +506,14 @@
                 active = me.activeIndex,
                 last = me.getLastIndex();
 
-            if ((active === 0 && offsetX < 0) || (active == last && offsetX > 0)) {
+            /*if ((active === 0 && offsetX < 0) || (active == last && offsetX > 0)) {
                 translateX += Math.ceil(offsetX / Math.log(Math.abs(offsetX)));
             } else {
                 translateX += offsetX;
-            }
+            }*/
             if (absX < itemWidth) {
                 // me.wrap.style[transform] = 'translate3d(' + -translateX + 'px, 0px, 0px)';
+                me._slipDistance(active, offsetX);
             }
         },
 
@@ -452,8 +525,10 @@
             this.el.removeEventListener(TOUCH_EVENTS.end, this, false);
 
             if (this.touchCoords) {
-                var itemWidth = this.getItemWidth(),
+                var me = this,
+                    itemWidth = this.getItemWidth(),
                     absX = Math.abs(this.touchCoords.startX - this.touchCoords.stopX),
+                    isSlideRight = this.touchCoords.startX > this.touchCoords.stopX ? true : false, //判断是否向左滑动
                     active = this.activeIndex,
                     transIndex;
 
@@ -471,7 +546,8 @@
                         transIndex = active;
                     }
 
-                    this.to(transIndex);
+                    this.to(transIndex, false, isSlideRight);
+
                     delete this.touchCoords;
                 }
             }

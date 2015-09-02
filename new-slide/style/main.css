@@ -91,7 +91,7 @@ footer.site .cop{color:#666;font-size:12px}
 .tips .topic-info{height:160px;position:relative;overflow:hidden}
 .tips .topic-swipe{height:160px;display:-webkit-box;display:-ms-flexbox;-webkit-transition-timing-function:cubic-bezier(0,0,.25,1);-webkit-transform:translate3d(0,0,0);-webkit-transition-duration:0;-webkit-transition-property:-webkit-transform;-webkit-transition-delay:0;position:relative}
 .tips .topic_img{margin:0 auto;vertical-align:top}
-.tips .topic-item{width:100%;-webkit-transform:translate3d(0,0,0);text-align:center;background:#443c2b url(http://s7.rr.itc.cn/org/wapChange/20155_5_13/a74j0w6913153689915.gif) no-repeat center center;-webkit-background-size:45px;-moz-background-size:45px;background-size:45px}
+.tips .topic-item{ float: left; position: relative; width:100%;-webkit-transform:translate3d(0,0,0);text-align:center;background:#443c2b url(http://s7.rr.itc.cn/org/wapChange/20155_5_13/a74j0w6913153689915.gif) no-repeat center center;-webkit-background-size:45px;-moz-background-size:45px;background-size:45px}
 .tips .topic-item img{width:100%;height:auto}
 .tips .topic .top h2{font-size:20px}
 .tips .topic .top h2 a{color:#d30000}
