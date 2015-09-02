@@ -118,6 +118,12 @@
             this.indicators = slice.call(this.indicators, 0);
         }
 
+        window.addEventListener( 'onorientationchange' in window ? 'orientationchange' : 'resize', (function(that){
+            return function() {
+                that.setInitPosition.call(that);
+            };   
+        })(this) , false );
+
         this.el.addEventListener(TOUCH_EVENTS.start, this, false);
 
         this.setInitPosition();
@@ -242,7 +248,7 @@
             me._move(len - 1, 0, -itemWidth);
             me._move(0, 0, 0);
 
-            for(j = len - 2; j > 0; j--){
+            for (j = len - 2; j > 0; j--) {
                 me._move(j, 0, itemWidth);
             }
         
@@ -345,12 +351,14 @@
                         if (me.indicators[lastActive]) removeClass(me.indicators[lastActive], me.indicatorCls);
                         if (me.indicators[me.activeIndex]) addClass(me.indicators[me.activeIndex], me.indicatorCls);
                     }
-                    me.onSlide(me.activeIndex);
+                    // me.onSlide(me.activeIndex);
                 };
 
             if (!silent) listenTransition(me.wrap, me.duration, handler);
 
             me._slipNext(toIndex, silent, isSlideRight);
+            me.onSlide(me.activeIndex);
+
             // me.wrap.style[transitionDuration] = silent ? '0ms' : me.duration + 'ms';
             // me.wrap.style[transform] = 'translate3d(' + (-me.getItemWidth() * toIndex) + 'px, 0px, 0px)';
             if (silent) handler();
@@ -387,7 +395,7 @@
 
             // 向右滑动
             // 有三种情况:
-            // 1.正常的滑动到下一帧 (第一帧滑到最后一帧需要特别的写出来)
+            // 1.正常的滑动到下一帧 (第一帧滑到第二帧需要特别的写出来)
             // 2.最后一帧滑动到第一帧
             // 3.向左滑动的时候，没有触发滑到上一帧，然后回到touchstart的起始位置
             if ( (toIndex > activeIndex && activeIndex !== lastIndex && activeIndex !== 0) ||
