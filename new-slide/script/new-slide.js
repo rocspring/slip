@@ -87,6 +87,25 @@
             clear();
             target.addEventListener(transitionEndEvent, handler, false);
             target.transitionTimer = setTimeout(handler, duration + 100);
+        },
+        createOrientationChangeProxy = function(fn, scope) {
+            var userAgent = window.navigator.userAgent,
+                isAndroid = /Android/i.test(userAgent),
+                isXiaoMi = /MI\s\d/i.test(userAgent);
+                
+            return function() {
+                clearTimeout(fn.orientationChangedTimer);
+                var args = slice.call(arguments, 0),
+
+                    // 对Android横竖屏抓换时使用延迟，在横竖屏转换时，屏幕高宽并不能立即生效
+                    // 有的Android少于400ms高宽就能生效，有的就会超过400ms
+                    // 小米自带浏览器延迟尤其厉害，原因未知
+                    delay = isAndroid ? (isXiaoMi ? 1000 : 400) : 0;
+
+                fn.orientationChangedTimer = setTimeout(function() {
+                        fn.apply(scope, args);
+                }, delay);
+            };
         };
 
     var Slide = function(config) {
@@ -119,11 +138,9 @@
             this.indicators = slice.call(this.indicators, 0);
         }
 
-        this._resetInitPosition = (function(that){
-            return function() {
-                that.setInitPosition.call(that);
-            };   
-        })(this);
+        this._resetInitPosition = createOrientationChangeProxy(function(){
+            this.setInitPosition.call(this);
+        },this);
         window.addEventListener( 'onorientationchange' in window ? 'orientationchange' : 'resize', this._resetInitPosition, false );
 
         this.el.addEventListener(TOUCH_EVENTS.start, this, false);
