@@ -100,7 +100,7 @@
                     // 对Android横竖屏抓换时使用延迟，在横竖屏转换时，屏幕高宽并不能立即生效
                     // 有的Android少于400ms高宽就能生效，有的就会超过400ms
                     // 小米自带浏览器延迟尤其厉害，原因未知
-                    // 搜狗浏览器也有延迟
+                    // 搜狗浏览器也有延迟 
                     delay = isAndroid ? (isXiaoMi ? 1000 : 400) : 0;
 
                 fn.orientationChangedTimer = setTimeout(function() {
